@@ -5,11 +5,17 @@
 Depuis la racine du challenge :
 
 ```powershell
-pip install -r dashboard/requirements.txt
-python dashboard/app.py
+pip install -r requirements.txt
+streamlit run dashboard/streamlit_app.py
 ```
 
-Ouvrir ensuite `http://127.0.0.1:8050`.
+Ouvrir ensuite `http://localhost:8501`.
+
+## Déploiement Streamlit Cloud
+
+Dans Streamlit Cloud, sélectionnez impérativement `dashboard/streamlit_app.py`
+comme **Main file path**. Ne sélectionnez pas `dashboard/app.py` : c'est la
+version Flask locale et elle ne peut pas être exécutée par Streamlit Cloud.
 
 ## Contenu
 
