@@ -67,6 +67,7 @@ T="""<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport conten
 {%else%}<div class=g2><section class='card method'><h2>Données mobilisées</h2><h3>Infrastructures</h3><span class=pill>Moov · 28</span><span class=pill>Togocom · 62</span><span class=pill>Télécom · 90</span><span class=pill>Data centers · 3</span><span class=pill>Mobile Money · 19 788</span><h3>Démographie</h3>RGPH‑5 2022 : {{matches}} communes raccordées sur {{communes}} observées. Les noms divergents restent hors ratios.</section><section class='card method'><h2>Méthode et limites</h2><h3>Trois lectures distinctes</h3>1. Mobile Money / 10 000 hab. : proximité financière. 2. Infrastructures fixes / 100 000 hab. : présence physique télécom. 3. Points / 10 000 hab. : maillage global des données recensées.<h3>Score de priorisation</h3>50 % faible densité Mobile Money + 25 % population + 25 % absence d’infrastructure fixe. Il désigne des communes à investiguer, pas des zones blanches.<h3>Couverture mobile</h3>Absente des fichiers : aucune zone blanche n’est calculée.</section></div>{%endif%}</div></main></body></html>"""
 
 @app.route('/')
+@app.route('/api/index')
 def dash():
     regs=sorted(DATA.region_nom_bdd.dropna().unique()); services=sorted(DATA.service.unique()); region=request.args.get('region','Toutes');service=request.args.get('service','Tous');page=request.args.get('page','home')
     if page not in {'home','access','map','priority','method'}:page='home'
