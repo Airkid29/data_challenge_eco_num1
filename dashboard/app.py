@@ -1,0 +1,90 @@
+"""Togo Connect — atlas décisionnel de l'inclusion numérique."""
+from __future__ import annotations
+import re, unicodedata, zipfile, xml.etree.ElementTree as ET
+from pathlib import Path
+import folium, pandas as pd, plotly.express as px
+from folium.plugins import FastMarkerCluster
+from flask import Flask, render_template_string, request
+
+ROOT=Path(__file__).resolve().parents[1]; RAW=ROOT/'data'/'raw'; app=Flask(__name__)
+COLORS={'Moov':'#26d2ac','Togocom':'#599fff','Télécom':'#f8b84e','Data center':'#d870d6','Mobile money':'#ee736a'}
+
+def clean(v):
+    if not isinstance(v,str): return v
+    try:return v.encode('latin1').decode('utf8') if 'Ã' in v else v
+    except UnicodeError:return v
+def key(v):
+    return re.sub('[^A-Z0-9]','',unicodedata.normalize('NFKD',clean(str(v)).upper()).encode('ascii','ignore').decode())
+def points(file,service):
+    d=pd.read_csv(RAW/file)
+    for c in d.select_dtypes('object'): d[c]=d[c].map(clean)
+    xy=d.geometry.str.extract(r'POINT \(([-.\d]+) ([-.\d]+)\)'); d['lon']=pd.to_numeric(xy[0]); d['lat']=pd.to_numeric(xy[1]); d['service']=service
+    d['nom']=d.get('etab_nom',pd.Series(service,index=d.index)).fillna(service); return d.dropna(subset=['lat','lon'])
+def population():
+    f=RAW/'Population_residente_par_dcoupage_administratif_et_par_sexe.xlsx'
+    if not f.exists(): return pd.DataFrame(columns=['geo','pop'])
+    with zipfile.ZipFile(f) as z:r=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+    ns={'x':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    rows=[[''.join(c.itertext()).strip() for c in x][:4] for x in r.findall('.//x:sheetData/x:row',ns)]
+    d=pd.DataFrame(rows[1:],columns=['name','sex','unit','pop']); d['pop']=pd.to_numeric(d['pop'],errors='coerce');d['geo']=d.name.map(key)
+    return d[d.sex.str.casefold().eq('total')].groupby('geo',as_index=False).pop.max()
+SOURCES=[('moov.csv','Moov'),('Togocom.csv','Togocom'),('file-Agences - Télécom-05-09-2026 18_17_40.csv','Télécom'),('canalplus.csv','CANAL+'),('datacenter.csv','Data center'),('mobile money.csv','Mobile money')]
+DATA=pd.concat([points(f,s) for f,s in SOURCES],ignore_index=True); POP=population()
+
+def fmap(d):
+    m=folium.Map(location=[8.7,.9],zoom_start=7,tiles='OpenStreetMap',control_scale=True); mm=d[d.service.eq('Mobile money')]
+    if len(mm):FastMarkerCluster(mm[['lat','lon']].values.tolist(),name='Mobile Money').add_to(m)
+    for s in ['Moov','Togocom','Télécom','Data center']:
+        g=folium.FeatureGroup(name=s,show=True)
+        for _,x in d[d.service.eq(s)].iterrows():folium.CircleMarker([x.lat,x.lon],radius=6,color=COLORS[s],fill=True,fill_opacity=.9,popup=f'<b>{x.nom}</b><br>{x.region_nom_bdd}<br>{x.commune_nom_bdd}').add_to(g)
+        g.add_to(m)
+    folium.LayerControl(collapsed=False).add_to(m);return m._repr_html_()
+def plot(fig):
+    fig.update_layout(template='plotly_dark',paper_bgcolor='#10181e',plot_bgcolor='#10181e',font_color='#d6e1df',margin=dict(l=10,r=10,t=25,b=10))
+    return fig.to_html(full_html=False,include_plotlyjs=False,config={'displayModeBar':False,'responsive':True})
+
+def commune_metrics(d):
+    """Indicateurs de desserte : ne pas confondre finance digitale et réseau mobile."""
+    c=d.groupby(['region_nom_bdd','commune_nom_bdd']).agg(
+        mm=('service',lambda x:int((x=='Mobile money').sum())),
+        fixed=('service',lambda x:int((x!='Mobile money').sum())),
+        points=('service','size'), services=('service','nunique')).reset_index()
+    c['geo']=c.commune_nom_bdd.map(key); c=c.merge(POP,on='geo',how='left'); c['pop']=c['pop'].fillna(0)
+    c=c[c['pop']>0].copy()
+    c['density']=c.points/c['pop']*10000
+    c['mm_density']=c.mm/c['pop']*10000
+    c['fixed_density']=c.fixed/c['pop']*100000
+    return c
+
+T="""<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Togo Connect</title><script src=https://cdn.plot.ly/plotly-2.35.2.min.js></script><style>
+:root{--b:#0a1014;--p:#10181e;--l:#27353c;--t:#eef5f3;--m:#91a4a1;--a:#27d3ad;--g:#f8b84e}*{box-sizing:border-box}body{margin:0;background:var(--b);color:var(--t);font:14px Inter,Arial}.side{position:fixed;width:258px;height:100vh;background:#0d1419;border-right:1px solid var(--l)}.brand{padding:26px 25px 18px;font-size:18px;font-weight:800;border-bottom:1px solid var(--l)}.brand small,.cap,.foot{display:block;color:#83a39d;font:10px monospace;letter-spacing:1.6px;margin-top:8px}.cap{padding:22px 25px 8px;margin:0}.side a{display:block;padding:13px 25px;color:#c8d2d0;text-decoration:none;font-weight:650;border-left:3px solid transparent}.side a:hover,.on{background:#123e37!important;color:#fff!important;border-left-color:var(--a)!important}.foot{position:absolute;bottom:0;width:100%;border-top:1px solid var(--l);padding:18px 25px;line-height:1.8}.main{margin-left:258px}.head{min-height:145px;padding:30px 42px;border-bottom:1px solid var(--l);display:flex;justify-content:space-between}.eye,.label{color:#83a79f;font:10px monospace;letter-spacing:1.5px}.head h1{font-size:29px;margin:12px 0 6px}.head p{margin:0;color:#b7c7c4;max-width:690px;font-size:16px;line-height:1.5}.stamp{text-align:right;font-size:12px;font-weight:800}.stamp small{display:block;margin-top:8px;color:#83a79f;font:10px monospace}.body{padding:28px 42px;max-width:1800px}.filter,.card{background:var(--p);border:1px solid var(--l);border-radius:6px}.filter{padding:16px;display:flex;gap:14px;align-items:end;margin-bottom:18px}.filter select{display:block;background:#0b1115;border:1px solid #3a4a50;color:#fff;padding:9px;width:230px;border-radius:4px;margin-top:6px}.filter button{border:0;padding:10px 18px;background:var(--a);color:#06231d;font-weight:800;border-radius:4px}.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.g2,.gw{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:18px}.gw{grid-template-columns:1.55fr 1fr}.card{padding:20px}.kpi{min-height:125px}.value{font-size:35px;font-weight:800;margin:12px 0 7px}.sub{color:var(--m);font-size:12px;line-height:1.55}.green{color:var(--a)}.gold{color:var(--g)}h2{font-size:16px;margin:0 0 6px}.chart{min-height:305px}.chart>div{width:100%!important}.map iframe{width:100%;height:650px;border:0;margin-top:14px}.ins{background:#0d211d;border-left:3px solid var(--a);padding:15px;margin:15px 0;line-height:1.55}.item{padding:12px 0;border-bottom:1px solid var(--l);line-height:1.5}.item b{color:var(--a);display:block}.tab{border-collapse:collapse;width:100%;margin-top:14px}.tab th{color:var(--m);font:10px monospace;text-align:left;padding:9px 6px;border-bottom:1px solid var(--l)}.tab td{padding:10px 6px;border-bottom:1px solid #202d33}.r{text-align:right!important}.badge{background:#443313;color:#ffdf9d;border:1px solid #775b28;padding:4px 7px;border-radius:3px;font:11px monospace}.method{line-height:1.75;color:#bfccca}.method h3{font-size:14px;color:#fff;margin:17px 0 3px}.pill{display:inline-block;padding:4px 8px;margin:4px 3px 0 0;border:1px solid #2e5d51;background:#16332e;color:#9ce3d4;border-radius:30px;font:10px monospace}@media(max-width:900px){.side{position:static;width:auto;height:auto}.foot,.stamp{display:none}.main{margin:0}.head,.body{padding:22px}.g4,.g2,.gw{grid-template-columns:1fr}.filter{flex-wrap:wrap}}</style>
+<body><aside class=side><div class=brand>◈ &nbsp; Togo Connect<small>ATLAS NUMÉRIQUE · DÉFI 2</small></div><div class=cap>SYNTHÈSE</div><a class='{{"on" if page=="home"}}' href='?page=home&region={{region}}&service={{service}}'>▦ &nbsp; Vue d'ensemble</a><div class=cap>AXES D'ANALYSE</div><a class='{{"on" if page=="access"}}' href='?page=access&region={{region}}&service={{service}}'>◉ &nbsp; Accès & équité</a><a class='{{"on" if page=="map"}}' href='?page=map&region={{region}}&service={{service}}'>⌖ &nbsp; Cartographie</a><a class='{{"on" if page=="priority"}}' href='?page=priority&region={{region}}&service={{service}}'>△ &nbsp; Priorisation</a><div class=cap>GOUVERNANCE</div><a class='{{"on" if page=="method"}}' href='?page=method&region={{region}}&service={{service}}'>ⓘ &nbsp; Données & méthode</a><div class=foot>7 jeux de données<br>{{regions|length}} régions · {{matches}} communes RGPH‑5<br>2022–2026 · Open Data</div></aside><main class=main><header class=head><div><div class=eye>DIAGNOSTIC TERRITORIAL · TOGO</div><h1>{{title}}</h1><p>{{subtitle}}</p></div><div class=stamp>RÉPUBLIQUE TOGOLAISE · DATA CHALLENGE<small>CONNECTIVITÉ · INCLUSION · DÉCISION</small></div></header><div class=body><form class=filter><input type=hidden name=page value='{{page}}'><div><span class=label>PÉRIMÈTRE</span><select name=region><option value=Toutes>Togo — ensemble national</option>{%for r in regions%}<option {%if r==region%}selected{%endif%}>{{r}}</option>{%endfor%}</select></div><div><span class=label>SERVICE ANALYSÉ</span><select name=service><option value=Tous>Tous les services</option>{%for s in services%}<option {%if s==service%}selected{%endif%}>{{s}}</option>{%endfor%}</select></div><button>Appliquer les filtres</button></form>
+{%if page in ['home','access']%}<div class=g4>{%for x in kpis%}<section class='card kpi'><div class=label>{{x[0]}}</div><div class=value>{{x[1]}}</div><div class='sub {{x[3]}}'>{{x[2]}}</div></section>{%endfor%}</div>{%endif%}
+{%if page=='home'%}<div class=gw><section class=card><h2>Densité territoriale de l’offre</h2><div class=sub>Points recensés pour 10 000 habitants — RGPH‑5 2022.</div><div class=chart>{{density|safe}}</div></section><section class=card><h2>Lecture exécutive</h2><div class=ins><b>{{insight[0]}}</b><br>{{insight[1]}}</div><div class=item><b>Ce que l’on mesure</b>Agences, data centers et services Mobile Money croisés à la population.</div><div class=item><b>Limite majeure</b>Sans couverture 2G/3G/4G, aucune zone blanche n’est affirmée.</div></section></div><div class=g2><section class=card><h2>Composition de l’offre</h2><div class=chart>{{mix|safe}}</div></section><section class=card><h2>Population et intensité de desserte</h2><div class=chart>{{equity|safe}}</div></section></div>
+{%elif page=='access'%}<div class=g2><section class=card><h2>Maillage du service sélectionné</h2><div class=sub>Présence de points recensés par 10 000 habitants ; ce n’est pas un indicateur de qualité réseau.</div><div class=chart>{{density|safe}}</div></section><section class=card><h2>Population et maillage</h2><div class=sub>Comparer l’intensité de points physiques entre régions de taille différente.</div><div class=chart>{{equity|safe}}</div></section></div><section class=card style='margin-top:18px'><h2>Lecture séparée des services</h2><table class=tab><tr><th>Région</th><th class=r>Population</th><th class=r>Mobile Money /10k</th><th class=r>Infrastructure fixe /100k</th><th class=r>Services distincts</th></tr>{%for x in rows%}<tr><td>{{x.region_nom_bdd}}</td><td class=r>{{"{:,}".format(x.pop|int).replace(',',' ')}}</td><td class=r>{{'%.1f'|format(x.mm_density)}}</td><td class=r>{{'%.2f'|format(x.fixed_density)}}</td><td class=r>{{x.services|int}}</td></tr>{%endfor%}</table></section>
+{%elif page=='map'%}<section class=card><h2>Carte opérationnelle des points d’accès</h2><div class=sub>Active ou masque les couches dans la légende. Les agents Mobile Money sont regroupés pour préserver la fluidité.</div><div class=map>{{map|safe}}</div></section>
+{%elif page=='priority'%}<div class=gw><section class=card><h2>Portefeuille de communes à investiguer</h2><div class=sub>Score : 50 % faible densité Mobile Money, 25 % population à servir, 25 % absence d’infrastructure fixe. Ce score ne mesure pas la couverture mobile.</div><table class=tab><tr><th>Commune</th><th>Région</th><th class=r>Population</th><th class=r>MM /10k</th><th class=r>Fixe</th><th class=r>Score</th></tr>{%for x in priorities%}<tr><td>{{x.commune_nom_bdd}}</td><td>{{x.region_nom_bdd}}</td><td class=r>{{"{:,}".format(x.pop|int).replace(',',' ')}}</td><td class=r>{{'%.1f'|format(x.mm_density)}}</td><td class=r>{{x.fixed|int}}</td><td class=r><span class=badge>{{x.score}} / 100</span></td></tr>{%endfor%}</table></section><section class=card><h2>Actions conditionnelles</h2><div class=item><b>1 · Déficit de service local</b>Examiner l’implantation d’agents et de points de vente dans les communes en tête de liste.</div><div class=item><b>2 · Vérifier la couverture</b>Ne déployer une infrastructure réseau qu’après superposition 2G/3G/4G.</div><div class=item><b>3 · Tester la faisabilité</b>Croiser énergie, routes, marchés, écoles et santé avant de choisir un site.</div><div class=item><b>4 · Mesurer l’impact</b>Suivre densité, activité des agents et disponibilité.</div></section></div><section class=card style='margin-top:18px'><h2>Population vs maillage de services</h2><div class=chart>{{priority|safe}}</div></section>
+{%else%}<div class=g2><section class='card method'><h2>Données mobilisées</h2><h3>Infrastructures</h3><span class=pill>Moov · 28</span><span class=pill>Togocom · 62</span><span class=pill>Télécom · 90</span><span class=pill>Data centers · 3</span><span class=pill>Mobile Money · 19 788</span><h3>Démographie</h3>RGPH‑5 2022 : {{matches}} communes raccordées sur {{communes}} observées. Les noms divergents restent hors ratios.</section><section class='card method'><h2>Méthode et limites</h2><h3>Trois lectures distinctes</h3>1. Mobile Money / 10 000 hab. : proximité financière. 2. Infrastructures fixes / 100 000 hab. : présence physique télécom. 3. Points / 10 000 hab. : maillage global des données recensées.<h3>Score de priorisation</h3>50 % faible densité Mobile Money + 25 % population + 25 % absence d’infrastructure fixe. Il désigne des communes à investiguer, pas des zones blanches.<h3>Couverture mobile</h3>Absente des fichiers : aucune zone blanche n’est calculée.</section></div>{%endif%}</div></main></body></html>"""
+
+@app.route('/')
+def dash():
+    regs=sorted(DATA.region_nom_bdd.dropna().unique()); services=sorted(DATA.service.unique()); region=request.args.get('region','Toutes');service=request.args.get('service','Tous');page=request.args.get('page','home')
+    if page not in {'home','access','map','priority','method'}:page='home'
+    d=DATA.copy();d=d if region=='Toutes' else d[d.region_nom_bdd.eq(region)];d=d if service=='Tous' else d[d.service.eq(service)]
+    c=commune_metrics(d)
+    # La priorisation utilise toujours l'offre complète, jamais une seule couche filtrée.
+    priority_scope=DATA if region=='Toutes' else DATA[DATA.region_nom_bdd.eq(region)]
+    cp=commune_metrics(priority_scope)
+    cp['score']=((1-cp.mm_density.rank(pct=True))*50+cp['pop'].rank(pct=True)*25+cp.fixed.eq(0).astype(int)*25).round().astype(int)
+    r=c.groupby('region_nom_bdd',as_index=False).agg(pop=('pop','sum'),points=('points','sum'),mm=('mm','sum'),fixed=('fixed','sum'),services=('services','max'))
+    r['density']=r.points/r['pop']*10000;r['mm_density']=r.mm/r['pop']*10000;r['fixed_density']=r.fixed/r['pop']*100000;r=r.sort_values('density')
+    den=c.points.sum()/c['pop'].sum()*10000 if len(c) else 0;low=r.iloc[0] if len(r) else None
+    density=px.bar(r,x='density',y='region_nom_bdd',orientation='h',color='density',color_continuous_scale=['#1e5147','#27d3ad'],labels={'region_nom_bdd':'','density':'Points / 10 000 habitants'});density.update_layout(height=310,coloraxis_showscale=False)
+    mix=px.bar(d.groupby(['region_nom_bdd','service']).size().reset_index(name='points'),x='region_nom_bdd',y='points',color='service',barmode='stack',color_discrete_map=COLORS);mix.update_layout(height=310,legend=dict(orientation='h',y=1.12))
+    eq=px.scatter(r,x='pop',y='density',size='points',color='region_nom_bdd',text='region_nom_bdd',labels={'pop':'Population RGPH-5','density':'Points / 10 000 hab.'});eq.update_traces(textposition='top center');eq.update_layout(height=310,showlegend=False)
+    pri=px.scatter(cp,x='pop',y='mm_density',size='points',color='score',color_continuous_scale=['#27d3ad','#f8b84e','#ee736a'],hover_name='commune_nom_bdd',labels={'pop':'Population RGPH-5','mm_density':'Mobile Money /10 000 hab.','score':'Priorité'});pri.update_layout(height=380)
+    kpis=[('POINTS D’ACCÈS',f'{len(d):,}'.replace(',',' '),'infrastructures et agents','green'),('MOBILE MONEY',f"{(d.service=='Mobile money').sum():,}".replace(',',' '),'services de proximité','green'),('AGENCES & DATA CENTERS',f"{(d.service!='Mobile money').sum():,}".replace(',',' '),'points fixes recensés','gold'),('DENSITÉ D’ACCÈS',f'{den:.1f}','points / 10 000 habitants','gold')]
+    titles={'home':('Vue d’ensemble','Où se situe le Togo sur l’accès aux services numériques et quelles zones doivent être investiguées ?'),'access':('Accès & équité territoriale','Comparer la présence des services à la population, région par région.'),'map':('Cartographie des infrastructures','Explorer la localisation des services numériques et télécoms.'),'priority':('Priorisation des investissements','Un portefeuille transparent de communes à investiguer.'),'method':('Données, méthode & limites','Traçabilité et périmètre réel des résultats.')}
+    insight=(f"{low.region_nom_bdd} présente la densité la plus faible.",f"{low.density:.1f} points pour 10 000 habitants, contre {den:.1f} pour le périmètre sélectionné. À confirmer avec la couverture mobile.") if low is not None else ('Aucune donnée','Changez les filtres.')
+    return render_template_string(T,page=page,title=titles[page][0],subtitle=titles[page][1],region=region,service=service,regions=regs,services=services,kpis=kpis,density=plot(density),mix=plot(mix),equity=plot(eq),priority=plot(pri),rows=r.to_dict('records'),priorities=cp.sort_values(['score','pop'],ascending=False).head(15).to_dict('records'),map=fmap(d) if page=='map' else '',matches=len(c),communes=d.commune_nom_bdd.nunique(),insight=insight)
+if __name__=='__main__':app.run(debug=True,port=8050)
