@@ -4,7 +4,7 @@ import re, unicodedata, zipfile, xml.etree.ElementTree as ET
 from pathlib import Path
 import folium, pandas as pd, plotly.express as px
 from folium.plugins import FastMarkerCluster
-from flask import Flask, render_template_string, request
+from flask import Flask, make_response, render_template_string, request
 
 ROOT=Path(__file__).resolve().parents[1]; RAW=ROOT/'data'/'raw'; app=Flask(__name__)
 COLORS={'Moov':'#26d2ac','Togocom':'#599fff','Télécom':'#f8b84e','CANAL+':'#d8a13d','Data center':'#d870d6','Mobile money':'#ee736a'}
@@ -31,7 +31,7 @@ def population():
 SOURCES=[('moov.csv','Moov'),('Togocom.csv','Togocom'),('file-Agences - Télécom-05-09-2026 18_17_40.csv','Télécom'),('canalplus.csv','CANAL+'),('datacenter.csv','Data center'),('mobile money.csv','Mobile money')]
 DATA=pd.concat([points(f,s) for f,s in SOURCES],ignore_index=True); POP=population()
 
-def fmap(d):
+def _build_map(d):
     m=folium.Map(location=[8.7,.9],zoom_start=7,tiles=None,control_scale=True)
     folium.TileLayer('OpenStreetMap',name='Plan de rues',control=True,show=True).add_to(m)
     folium.TileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',attr='&copy; OpenStreetMap &copy; CARTO',name='Fond clair',control=True).add_to(m)
@@ -42,7 +42,14 @@ def fmap(d):
         g=folium.FeatureGroup(name=s,show=True)
         for _,x in d[d.service.eq(s)].iterrows():folium.CircleMarker([x.lat,x.lon],radius=6,color=COLORS[s],fill=True,fill_opacity=.9,tooltip=f'{s} · {x.nom}',popup=f'<b>{x.nom}</b><br>Service : {s}<br>Région : {x.region_nom_bdd}<br>Commune : {x.commune_nom_bdd}').add_to(g)
         g.add_to(m)
-    folium.LayerControl(collapsed=False).add_to(m);return m._repr_html_()
+    folium.LayerControl(collapsed=False).add_to(m)
+    return m
+
+def fmap(d):
+    return _build_map(d)._repr_html_()
+
+def fmap_document(d):
+    return _build_map(d).get_root().render()
 def plot(fig):
     fig.update_layout(template='plotly_dark',paper_bgcolor='#10181e',plot_bgcolor='#10181e',font_color='#d6e1df',margin=dict(l=10,r=10,t=25,b=10))
     return fig.to_html(full_html=False,include_plotlyjs=False,config={'displayModeBar':False,'responsive':True})
@@ -66,7 +73,7 @@ T="""<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport conten
 {%if page in ['home','access']%}<div class=g4>{%for x in kpis%}<section class='card kpi'><div class=label>{{x[0]}}</div><div class=value>{{x[1]}}</div><div class='sub {{x[3]}}'>{{x[2]}}</div></section>{%endfor%}</div>{%endif%}
 {%if page=='home'%}<div class=gw><section class=card><h2>Densité territoriale de l’offre</h2><div class=sub>Points recensés pour 10 000 habitants — RGPH‑5 2022.</div><div class=chart>{{density|safe}}</div></section><section class=card><h2>Lecture exécutive</h2><div class=ins><b>{{insight[0]}}</b><br>{{insight[1]}}</div><div class=item><b>Ce que l’on mesure</b>Agences, data centers et services Mobile Money croisés à la population.</div><div class=item><b>Limite majeure</b>Sans couverture 2G/3G/4G, aucune zone blanche n’est affirmée.</div></section></div><div class=g2><section class=card><h2>Composition de l’offre</h2><div class=chart>{{mix|safe}}</div></section><section class=card><h2>Population et intensité de desserte</h2><div class=chart>{{equity|safe}}</div></section></div>
 {%elif page=='access'%}<div class=g2><section class=card><h2>Maillage du service sélectionné</h2><div class=sub>Présence de points recensés par 10 000 habitants ; ce n’est pas un indicateur de qualité réseau.</div><div class=chart>{{density|safe}}</div></section><section class=card><h2>Population et maillage</h2><div class=sub>Comparer l’intensité de points physiques entre régions de taille différente.</div><div class=chart>{{equity|safe}}</div></section></div><section class=card style='margin-top:18px'><h2>Lecture séparée des services</h2><table class=tab><tr><th>Région</th><th class=r>Population</th><th class=r>Mobile Money /10k</th><th class=r>Infrastructure fixe /100k</th><th class=r>Services distincts</th></tr>{%for x in rows%}<tr><td>{{x.region_nom_bdd}}</td><td class=r>{{"{:,}".format(x.pop|int).replace(',',' ')}}</td><td class=r>{{'%.1f'|format(x.mm_density)}}</td><td class=r>{{'%.2f'|format(x.fixed_density)}}</td><td class=r>{{x.services|int}}</td></tr>{%endfor%}</table></section>
-{%elif page=='map'%}<section class=card><h2>Carte opérationnelle des points d’accès</h2><div class=sub>Active ou masque les couches dans la légende. Les agents Mobile Money sont regroupés pour préserver la fluidité.</div><div class=map>{{map|safe}}</div></section>
+{%elif page=='map'%}<section class=card><h2>Carte opérationnelle des points d’accès</h2><div class=sub>Active ou masque les couches dans la légende. Les agents Mobile Money sont regroupés pour préserver la fluidité.</div><a class=filter-download href='/download-map?region={{region}}&service={{service}}'>Télécharger la carte filtrée</a><div class=map>{{map|safe}}</div></section>
 {%elif page=='priority'%}<div class=gw><section class=card><h2>Portefeuille de communes à investiguer</h2><div class=sub>Score : 50 % faible densité Mobile Money, 25 % population à servir, 25 % absence d’infrastructure fixe. Ce score ne mesure pas la couverture mobile.</div><table class=tab><tr><th>Commune</th><th>Région</th><th class=r>Population</th><th class=r>MM /10k</th><th class=r>Fixe</th><th class=r>Score</th></tr>{%for x in priorities%}<tr><td>{{x.commune_nom_bdd}}</td><td>{{x.region_nom_bdd}}</td><td class=r>{{"{:,}".format(x.pop|int).replace(',',' ')}}</td><td class=r>{{'%.1f'|format(x.mm_density)}}</td><td class=r>{{x.fixed|int}}</td><td class=r><span class=badge>{{x.score}} / 100</span></td></tr>{%endfor%}</table></section><section class=card><h2>Actions conditionnelles</h2><div class=item><b>1 · Déficit de service local</b>Examiner l’implantation d’agents et de points de vente dans les communes en tête de liste.</div><div class=item><b>2 · Vérifier la couverture</b>Ne déployer une infrastructure réseau qu’après superposition 2G/3G/4G.</div><div class=item><b>3 · Tester la faisabilité</b>Croiser énergie, routes, marchés, écoles et santé avant de choisir un site.</div><div class=item><b>4 · Mesurer l’impact</b>Suivre densité, activité des agents et disponibilité.</div></section></div><section class=card style='margin-top:18px'><h2>Population vs maillage de services</h2><div class=chart>{{priority|safe}}</div></section>
 {%else%}<div class=g2><section class='card method'><h2>Données mobilisées</h2><h3>Infrastructures</h3><span class=pill>Moov · 28</span><span class=pill>Togocom · 62</span><span class=pill>Télécom · 90</span><span class=pill>Data centers · 3</span><span class=pill>Mobile Money · 19 788</span><h3>Démographie</h3>RGPH‑5 2022 : {{matches}} communes raccordées sur {{communes}} observées. Les noms divergents restent hors ratios.</section><section class='card method'><h2>Méthode et limites</h2><h3>Trois lectures distinctes</h3>1. Mobile Money / 10 000 hab. : proximité financière. 2. Infrastructures fixes / 100 000 hab. : présence physique télécom. 3. Points / 10 000 hab. : maillage global des données recensées.<h3>Score de priorisation</h3>50 % faible densité Mobile Money + 25 % population + 25 % absence d’infrastructure fixe. Il désigne des communes à investiguer, pas des zones blanches.<h3>Couverture mobile</h3>Absente des fichiers : aucune zone blanche n’est calculée.</section></div>{%endif%}</div></main></body></html>"""
 
@@ -111,4 +118,20 @@ def dash():
     analysis_html='<section class="analysis-grid"><article class="card"><h3>Ce que les chiffres racontent</h3>'+''.join(f'<p><strong>{title}</strong> {text}</p>' for title,text in findings)+'</article><article class="card"><h3>Décisions à prendre</h3><p><strong>1. Cibler avant de déployer.</strong> Commencer par les communes à faible densité Mobile Money et forte population, puis vérifier la couverture réseau et la viabilité du site.</p><p><strong>2. Séparer les leviers.</strong> Un déficit d’agents n’appelle pas automatiquement un investissement dans une infrastructure télécom fixe.</p><p><strong>3. Compléter la mesure.</strong> Ajouter couverture 2G/3G/4G, qualité de service, fréquentation et distance au point le plus proche avant toute décision.</p></article><article class="card"><h3>Mobile Money vs infrastructures fixes</h3><div class="chart">'+plot(coverage_fig)+'</div></article></section>' if page in {'home','access','priority'} else ''
     html=render_template_string(T,page=page,title=titles[page][0],subtitle=titles[page][1],region=region,service=service,regions=regs,services=services,kpis=kpis,density=plot(density),mix=plot(mix),equity=plot(eq),priority=plot(pri),rows=r.to_dict('records'),priorities=cp.sort_values(['score','pop'],ascending=False).head(15).to_dict('records'),map=fmap(d) if page=='map' else '',matches=len(c),communes=d.commune_nom_bdd.nunique(),insight=insight)
     return html.replace('</style>',THEME_CSS+SIDEBAR_THEME_CSS+VISUAL_FIX_CSS+'</style>').replace('</div></main></body>',analysis_html+'</div></main>'+THEME_SCRIPT+SIDEBAR_THEME_SCRIPT+'</body>')
+
+@app.route('/download-map')
+def download_map():
+    region=request.args.get('region','Toutes')
+    service=request.args.get('service','Tous')
+    data=DATA.copy()
+    if region != 'Toutes':
+        data=data[data.region_nom_bdd.eq(region)]
+    if service != 'Tous':
+        data=data[data.service.eq(service)]
+    filename=f"carte_togo_{key(region) or 'national'}_{key(service) or 'tous-services'}.html"
+    response=make_response(fmap_document(data))
+    response.headers['Content-Type']='text/html; charset=utf-8'
+    response.headers['Content-Disposition']=f'attachment; filename="{filename}"'
+    return response
+
 if __name__=='__main__':app.run(debug=True,port=8050)

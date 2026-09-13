@@ -8,7 +8,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import plotly.express as px
 
-from app import COLORS, DATA, commune_metrics, fmap
+from app import COLORS, DATA, commune_metrics, fmap, fmap_document
 
 st.set_page_config(page_title="Togo Connect | Atlas numérique", page_icon="◈", layout="wide")
 
@@ -126,6 +126,14 @@ elif page == "Accès & équité":
 elif page == "Cartographie":
     st.caption("Utilise le contrôle en haut à droite de la carte pour activer ou masquer les couches.")
     components.html(fmap(data), height=700, scrolling=False)
+    filename = f"carte_togo_{region.replace(' ', '_')}_{service.replace(' ', '_')}.html"
+    st.download_button(
+        "Télécharger la carte filtrée",
+        data=fmap_document(data),
+        file_name=filename,
+        mime="text/html",
+        use_container_width=False,
+    )
 
 elif page == "Priorisation":
     st.info("Score d'investigation : 50 % faible densité Mobile Money + 25 % population à servir + 25 % absence d'infrastructure fixe. Il ne désigne pas une zone blanche.")
