@@ -32,7 +32,7 @@ SOURCES=[('moov.csv','Moov'),('Togocom.csv','Togocom'),('file-Agences - Téléco
 DATA=pd.concat([points(f,s) for f,s in SOURCES],ignore_index=True); POP=population()
 
 def _build_map(d):
-    m=folium.Map(location=[8.7,.9],zoom_start=7,tiles=None,control_scale=True)
+    m=folium.Map(location=[8.7,.9],zoom_start=7,tiles=None,control_scale=True,max_bounds=True,min_zoom=6)
     folium.TileLayer('OpenStreetMap',name='Plan de rues',control=True,show=True).add_to(m)
     folium.TileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',attr='&copy; OpenStreetMap &copy; CARTO',name='Fond clair',control=True).add_to(m)
     folium.TileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',attr='&copy; OpenStreetMap &copy; CARTO',name='Fond sombre',control=True,show=False).add_to(m)
@@ -42,6 +42,11 @@ def _build_map(d):
         g=folium.FeatureGroup(name=s,show=True)
         for _,x in d[d.service.eq(s)].iterrows():folium.CircleMarker([x.lat,x.lon],radius=6,color=COLORS[s],fill=True,fill_opacity=.9,tooltip=f'{s} · {x.nom}',popup=f'<b>{x.nom}</b><br>Service : {s}<br>Région : {x.region_nom_bdd}<br>Commune : {x.commune_nom_bdd}').add_to(g)
         g.add_to(m)
+    if len(d):
+        bounds=[[float(d.lat.min()),float(d.lon.min())],[float(d.lat.max()),float(d.lon.max())]]
+        m.fit_bounds(bounds,padding=(20,20),max_zoom=10)
+    else:
+        m.fit_bounds([[5.8,-0.2],[11.2,1.9]])
     folium.LayerControl(collapsed=False).add_to(m)
     return m
 
